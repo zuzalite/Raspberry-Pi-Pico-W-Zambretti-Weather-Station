@@ -8,11 +8,11 @@
 #include <ArduinoJson.h> // Hivatalos ipari JSON feldolgozó könyvtár
 
 // --- WI-FI SETTINGS ---
-const char* WIFI_SSID = "xxxxxxxxxxxxxxxx";
-const char* WIFI_PASSWORD = "xxxxxxxxxxxxx";
+const char* WIFI_SSID = "xxxxxxxxx";
+const char* WIFI_PASSWORD = "xxxxxxxx";
 
 // --- THINGSPEAK ---
-unsigned long myChannelNumber = xxxxxxxxxxx;
+unsigned long myChannelNumber = xxxxxx;
 const char* myReadAPIKey = "xxxxxxxxxxxx";
 
 // --- OLED ---
@@ -24,10 +24,12 @@ WiFiClient client;
 
 // Global measurement variables
 float inTemp = 0.0, outTemp = 0.0, pressure = 0.0;
-float pressureHistory[6] = {0.0};
-float pressureMA[6] = {0.0};
-float tempInHistory[10] = {0.0};
-float tempOutHistory[10] = {0.0};
+
+// MATEMATIKAI JAVÍTÁS: 61 elem kell a 60 perces, 11 elem a 10 perces tiszta időkülönbséghez
+float pressureHistory[61] = {0.0};
+float pressureMA[61] = {0.0};
+float tempInHistory[11] = {0.0};
+float tempOutHistory[11] = {0.0};
 const int MA_WINDOW = 3;
 
 String currentWindDir = "N"; 
@@ -36,7 +38,6 @@ bool isBarometricCrash = false;
 // Timers
 unsigned long lastUpdateCheck = 0;
 unsigned long lastScreenSwitch = 0;
-unsigned long lastHourlyCheck = 0;
 unsigned long lastWindCheck = 0;     
 int currentScreen = 1;
 bool historyReady = false;
@@ -108,7 +109,6 @@ void updateSeason() {
   }
 }
 
-// ÚJ, ABSZOLÚT TÉVEDHETETLEN JSON PARSOLÓ FÜGGVÉNY
 bool fetchWindDirection() {
   if (WiFi.status() != WL_CONNECTED) {
     openMeteoStr = "NOK (No Net)";
@@ -123,12 +123,10 @@ bool fetchWindDirection() {
   if (httpCode == 200) {
     String payload = http.getString();
     
-    // Memória lefoglalása a JSON struktúrának
-    DynamicJsonDocument doc(1024);
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, payload);
     
     if (!error) {
-      // Közvetlen, strukturált adatkiolvasás az API-ból
       float wind_deg = doc["current_weather"]["winddirection"];
       
       if (337.5 <= wind_deg || wind_deg < 22.5)       currentWindDir = "N";
@@ -152,11 +150,19 @@ bool fetchWindDirection() {
   return success;
 }
 
-char getTrendChar(float current, float past) {
+char getTempTrendChar(float current, float past) {
   if (past == 0.0) return '-'; 
   float delta = current - past;
-  if (delta >= 0.25) return '^';
-  if (delta <= -0.25) return 'v';
+  if (delta >= 0.20) return '^';
+  if (delta <= -0.20) return 'v';
+  return '-';
+}
+
+char getPressTrendChar(float current, float past) {
+  if (past == 0.0) return '-'; 
+  float delta = current - past;
+  if (delta >= 0.10) return '^';
+  if (delta <= -0.10) return 'v';
   return '-';
 }
 
@@ -185,62 +191,63 @@ bool fetchLatestData() {
 }
 
 void updateLocalHistory() {
-  unsigned long currentMillis = millis();
-  
-  if (lastHourlyCheck == 0 || currentMillis - lastHourlyCheck >= 3600000UL) {
-    lastHourlyCheck = currentMillis;
-    
-    for (int i = 0; i < 9; i++) {
-      tempInHistory[i] = tempInHistory[i+1];
-      tempOutHistory[i] = tempOutHistory[i+1];
-    }
-    tempInHistory[9] = inTemp;
-    tempOutHistory[9] = outTemp;
-
-    for (int i = 0; i < 5; i++) {
-      pressureHistory[i] = pressureHistory[i+1];
-      pressureMA[i] = pressureMA[i+1];
-    }
-    pressureHistory[5] = pressure;
-    
-    float sum = 0.0;
-    int count = 0;
-    for (int i = 6 - MA_WINDOW; i < 6; i++) {
-      if (pressureHistory[i] > 950.0) { sum += pressureHistory[i]; count++; }
-    }
-    pressureMA[5] = (count > 0) ? sum / count : pressure;
-    
-    float shortTrend = pressureMA[5] - pressureMA[4];
-    if (shortTrend <= -1.0 && pressureMA[4] > 950.0) {
-      isBarometricCrash = true; 
-    } else {
-      isBarometricCrash = false;
-    }
-    
-    int valid = 0;
-    for (int i = 0; i < 6; i++) if (pressureHistory[i] > 950.0) valid++;
-    if (valid >= MA_WINDOW) historyReady = true;
+  // JAVÍTVA: Léptetés a 11 elemű hőmérséklet tömbben (0-tól 9-ig fut, így a 10. index szabadul fel)
+  for (int i = 0; i < 10; i++) {
+    tempInHistory[i] = tempInHistory[i+1];
+    tempOutHistory[i] = tempOutHistory[i+1];
   }
+  tempInHistory[10] = inTemp;
+  tempOutHistory[10] = outTemp;
+
+  // JAVÍTVA: Léptetés a 61 elemű nyomás tömbben (0-tól 59-ig fut, a 60. index szabadul fel)
+  for (int i = 0; i < 60; i++) {
+    pressureHistory[i] = pressureHistory[i+1];
+    pressureMA[i] = pressureMA[i+1];
+  }
+  pressureHistory[60] = pressure;
+  
+  // JAVÍTVA: Mozgóátlag az utolsó 3 elemre a 61 elemű tömbben (58, 59, 60. indexek)
+  float sum = 0.0;
+  int count = 0;
+  for (int i = 61 - MA_WINDOW; i < 61; i++) {
+    if (pressureHistory[i] > 950.0) { sum += pressureHistory[i]; count++; }
+  }
+  pressureMA[60] = (count > 0) ? sum / count : pressure;
+  
+  // JAVÍTVA: Barometric crash pontosan 5 perces ablakban (60. index vs 55. index: delta = 5)
+  float shortTrend = pressureMA[60] - pressureMA[55];
+  if (shortTrend <= -0.7 && pressureMA[55] > 950.0) {
+    isBarometricCrash = true; 
+  } else {
+    isBarometricCrash = false;
+  }
+  
+  // JAVÍTVA: Inicializációs ellenőrzés igazítása 61 elemre
+  int valid = 0;
+  for (int i = 0; i < 61; i++) if (pressureHistory[i] > 950.0) valid++;
+  if (valid >= MA_WINDOW) historyReady = true;
 }
 
 String getForecastText() {
-  if (!historyReady || pressureMA[5] < 950.0) return "COLLECTING...";
+  // JAVÍTVA: Index igazítása 60-ra
+  if (!historyReady || pressureMA[60] < 950.0) return "COLLECTING...";
   if (isBarometricCrash) return "STORM WARNING"; 
   
-  float p = pressureMA[5];
-  float raw_trend = pressureMA[5] - pressureMA[0]; 
+  float p = pressureMA[60];
+  // JAVÍTVA: Pontosan 60 perc különbség (60. index - 0. index)
+  float raw_trend = pressureMA[60] - pressureMA[0]; 
   int wind_mod = 0;
   
   if (currentWindDir == "S" || currentWindDir == "SW" || currentWindDir == "SE") wind_mod = 2; 
   else if (currentWindDir == "W" || currentWindDir == "E") wind_mod = 1;
   
   float trend = raw_trend - (wind_mod * 0.4);
-  float seasonalFactor = isSummer ? -0.5 : 0.5;
+  float seasonalFactor = isSummer ? -0.3 : 0.3; 
   
-  if (trend <= -4.0 + seasonalFactor) return (p < 1005) ? "STORMY RAIN" : "RAIN/WEATHER";
-  if (trend <= -2.0) return "BAD WEATHER";
-  if (trend >= 3.0 + seasonalFactor) return "SUNNY/CLEAR"; 
-  if (trend >= 1.5) return "SLOW IMPROV.";
+  if (trend <= -1.5 + seasonalFactor) return (p < 1005) ? "STORMY RAIN" : "RAIN/WEATHER";
+  if (trend <= -0.6) return "BAD WEATHER";
+  if (trend >= 1.2 + seasonalFactor) return "SUNNY/CLEAR"; 
+  if (trend >= 0.5) return "SLOW IMPROV.";
   
   if (p >= 1020) return "STABLE SUNNY";
   if (p >= 1013) return isSummer ? "SUNNY/DRY" : "CLOUDY/DRY"; 
@@ -253,9 +260,12 @@ void updateDisplay() {
   display.setTextColor(SSD1306_WHITE);
   
   if (currentScreen == 1) {
-    char trendIn = getTrendChar(inTemp, tempInHistory[0]);
-    char trendOut = getTrendChar(outTemp, tempOutHistory[0]);
-    char trendP = getTrendChar(pressure, pressureMA[4]);
+    // JAVÍTVA: Pontosan 10 perces delta (10. index - 0. index)
+    char trendIn = getTempTrendChar(tempInHistory[10], tempInHistory[0]);
+    char trendOut = getTempTrendChar(tempOutHistory[10], tempOutHistory[0]);
+    
+    // JAVÍTVA: Pontosan 10 perces delta a légnyomásnál (60. index - 50. index)
+    char trendP = getPressTrendChar(pressureMA[60], pressureMA[50]);
     float diff = inTemp - outTemp;
     
     display.setTextSize(1);
@@ -312,8 +322,9 @@ void setup() {
   
   drawBootScreen("All ready!");
   if (tsStatusStr == "OK") {
-    for(int i=0; i<10; i++) { tempInHistory[i] = inTemp; tempOutHistory[i] = outTemp; }
-    for(int i=0; i<6; i++) { pressureHistory[i] = pressure; pressureMA[i] = pressure; }
+    // JAVÍTVA: Feltöltés az új tömbméretek szerint (11 és 61)
+    for(int i=0; i<11; i++) { tempInHistory[i] = inTemp; tempOutHistory[i] = outTemp; }
+    for(int i=0; i<61; i++) { pressureHistory[i] = pressure; pressureMA[i] = pressure; }
   }
   delay(2000); 
   updateDisplay();
@@ -326,7 +337,7 @@ void loop() {
     lastUpdateCheck = currentMillis;
     connectWiFi();
     if (fetchLatestData()) {
-      updateLocalHistory();
+      updateLocalHistory(); 
       if (currentScreen == 1) updateDisplay(); 
     }
   }
