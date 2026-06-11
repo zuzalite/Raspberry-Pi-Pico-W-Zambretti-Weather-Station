@@ -1,4 +1,4 @@
-# Raspberry-Pi-Pico-W-Zambretti-Weather-Station
+
 
 # Raspberry Pi Pico W – Zambretti Weather Station
 
