@@ -1,84 +1,74 @@
+# Raspberry-Pi-Pico-W-Zambretti-Weather-Station
 
 
-# Raspberry Pi Pico W – Zambretti Weather Station
-
-This repository contains an advanced weather forecasting system based on the classic **Zambretti Algorithm**. The project is designed to run on a **Raspberry Pi Pico W**, fetching indoor and outdoor environmental data from a ThingSpeak channel, retrieving live wind direction via the Open-Meteo API, and displaying localized weather predictions on an I2C OLED screen.
+An advanced, internet-connected weather station built on the Raspberry Pi Pico W. The system fetches indoor and outdoor environmental data from a ThingSpeak channel, retrieves real-time wind direction from the Open-Meteo API, and displays live measurements alongside a mathematically optimized 1-hour meteorological forecast on an SSD1306 OLED display.
 
 ---
 
-## 🛠️ Hardware Requirements & Pinout
+## Hardware Setup & Wiring
 
-Although the codebase uses Arduino framework syntax (`#include <WiFi.h>`, Wire, etc.), it is fully compatible with the Raspberry Pi Pico W when using the **Arduino Mbed OS RP2040** or **Earle Philhower's RP2040** core in the Arduino IDE.
+The system uses an **SSD1306 128x64 OLED display** communicating via the **I2C protocol**. By default, the Arduino wire library on the Raspberry Pi Pico W initializes the default `I2C0` bus.
 
-### Components
-* **Microcontroller:** Raspberry Pi Pico W
-* **Display:** SSD1306 OLED Display (128x64, I2C interface)
-* **Data Sources:** Virtual cloud data (ThingSpeak & Open-Meteo API)
+Connect your OLED display to the Pico W using the following pinout configuration:
 
-### I2C Wiring Diagram (Default Pins)
-The SSD1306 OLED display requires 4 connections. On the Raspberry Pi Pico W, the default I2C0 pins are typically mapped as follows:
-
-| OLED Pin | Pico W Pin Name | Physical Pin Number | Description |
+| OLED Pin | Pico W Pin Name | Pico W Physical Pin | Description |
 | :--- | :--- | :--- | :--- |
-| **VCC** | 3V3 (OUT) | Pin 36 | 3.3V Power Supply |
+| **VCC** | 3V3(OUT) | Pin 36 | 3.3V Power Supply |
 | **GND** | GND | Pin 38 (or any GND) | Ground |
-| **SDA** | GP4 (I2C0 SDA) | Pin 6 | I2C Data Line |
-| **SCL** | GP5 (I2C0 SCL) | Pin 7 | I2C Clock Line |
-
-> ⚠️ **Note:** Ensure your physical wiring matches the I2C configuration of your board core. If needed, the default pins can be initialized in the setup using `Wire.setSDA(4); Wire.setSCL(5); Wire.begin();`.
+| **SDA** | GP4 | Pin 6 | I2C Data Line |
+| **SCL** | GP5 | Pin 7 | I2C Clock Line |
 
 ---
 
-## 🧠 How the Algorithm Works (Core Principles)
+## Key Improvements over Standard Implementations
 
-The microcontroller processes atmospheric data through a **3-step logical filter** executed sequentially to yield an accurate, stabilized local forecast:
+Compared to basic implementations, this software introduces several robust architectural upgrades:
 
-### I. Noise Filtering (Moving Average)
-[cite_start]Raw barometric data coming from sensors can occasionally experience minor spikes due to hardware inaccuracies[cite: 16]. [cite_start]To establish a clean calculation baseline, the code implements a **Moving Average (MA)** filter utilizing a window of the last 3 hourly readings[cite: 17]. 
-
-### II. Trend Calculation & Wind Modification
-[cite_start]The code evaluates the current pressure against the historical record from 6 hours prior[cite: 18].
-* [cite_start]**Negative Result:** Falling pressure (worsening weather ahead)[cite: 19].
-* [cite_start]**Positive Result:** Rising pressure (improving weather ahead)[cite: 20].
-
-#### The Role of Wind Direction
-[cite_start]In meteorology, southern winds (S, SW, SE) generally transport warm, moisture-laden air that increases the likelihood of precipitation, whereas northern or eastern winds (N, NE, NW, E) bring drier, more stable conditions[cite: 21]. [cite_start]The code applies a **Zambretti Correction factor** based on this data[cite: 22]:
-* [cite_start]**S, SW, or SE:** `wind_mod = 2` (artificially penalizes the trend because southerly winds reduce the probability of fair weather)[cite: 22].
-* [cite_start]**W or E:** `wind_mod = 1` (applies a minor adjustment)[cite: 23].
-* **N, NE, or NW:** `wind_mod = 0` (no penalty applied).
-
-$$\text{Modified Trend} = \text{Raw Trend} - (\text{Wind Modifier} \times 0.4) \pm \text{Seasonal Factor}$$
-
-### III. Seasonality (Winter / Summer)
-[cite_start]The atmosphere behaves differently in the summer than it does in the winter[cite: 24]. [cite_start]Under identical high-pressure conditions, winter can bring persistent dense fog or low stratocumulus clouds, while summer guarantees bright, uninterrupted sunshine[cite: 25]. 
-
-[cite_start]Using synchronized network time (NTP), the firmware automatically detects whether the date falls between March and September (`isSummer = true`) and dynamically recalibrates the evaluation thresholds[cite: 26].
+* **Real-time 1-Minute Intervals:** The blocking hourly delay has been eliminated. The system cycles through memory every minute, ensuring sudden weather fronts are captured instantly.
+* **Fencepost (Off-by-One) Error Correction:** History arrays are expanded to 61 and 11 elements respectively. This guarantees that the delta between the first and last array indexes represents exactly 60 minutes and 10 minutes of elapsed time.
+* **Moving Average Noise Filtering:** Uses a 3-minute rolling average for barometric pressure to eliminate sensor noise and sudden micro-fluctuations caused by wind gusts.
+* **Dynamic Trend Indicators:** Arrows (`^`, `v`, `-`) utilize isolated, meteorologically realistic thresholds ($0.10\text{ hPa}$ for pressure, $0.20\text{ °C}$ for temperature) over a precise 10-minute window.
+* **Modernized JSON Parsing:** Upgraded to the official ArduinoJson v7 standard, replacing deprecated dynamic documents with memory-safe, auto-scaling `JsonDocument` architecture.
 
 ---
 
-## 📊 Display Expressions & Meanings
+## Mathematical Calculations & Forecast Logic
 
-The system rotates between two screens on the OLED. Screen 1 displays raw numeric values (with trend arrows `^`, `v`, `-`), while Screen 2 outputs the textual forecast generated by the final modified Zambretti calculation:
+The core prediction algorithm runs on three distinct rolling time horizons using localized physics adjustments.
 
-* **`COLLECTING...`**
-    [cite_start]Displayed upon startup[cite: 1, 2]. [cite_start]The algorithm requires a minimum 6-hour history tracking window before it can accurately calculate a trend[cite: 2].
-* **`STORM WARNING`**
-    [cite_start]A critical alert triggered immediately if barometric pressure plummets abruptly ($\ge 1\text{ hPa}$ within a single hour)[cite: 3]. [cite_start]This bypasses normal trend checking to warn of fast-approaching severe thunderstorms[cite: 3, 4].
-* **`STORMY RAIN`**
-    [cite_start]Triggered by a low baseline pressure combined with an extremely fast-dropping trend[cite: 5]. [cite_start]Indicates heavy, continuous rain and strong winds[cite: 6].
-* **`BAD WEATHER`**
-    [cite_start]Triggered by a steadily decreasing pressure trend[cite: 6]. [cite_start]Indicates overcast, rainy, and unpleasant conditions[cite: 7].
-* **`LOW/CLOUDY`**
-    [cite_start]The pressure is below average but has stagnated (stopped falling)[cite: 7]. [cite_start]Typically indicates persistent cloudy, gloomy weather without significant rain[cite: 8].
-* **`CLOUDY/STAB.`**
-    [cite_start]Stagnant pressure trend centered around medium baseline pressures[cite: 8]. [cite_start]Indicates variable, cloudy skies but no immediate deterioration[cite: 9].
-* **`CLOUDY/DRY`**
-    [cite_start]Mainly appears during the winter period under higher atmospheric pressure conditions where cloudy skies persist but no precipitation is expected[cite: 10, 11].
-* **`SLOW IMPROV.`**
-    Barometric pressure has started to climb[cite: 11, 12]. Cloud cover is slowly breaking apart, signifying approaching fairer weather[cite: 12].
-* **`SUNNY/DRY`**
-    Triggered during the summer season under high, slightly rising pressure[cite: 13]. Indicates clear, warm, and pleasant weather[cite: 13].
-* **`STABLE SUNNY`**
-    High, locked-in atmospheric pressure ($\ge 1020\text{ hPa}$)[cite: 14]. Signifies a lasting anticyclone bringing prolonged, undisturbed sunshine[cite: 14].
-* **`SUNNY/CLEAR`**
-    Triggered by a very rapidly rising barometric trend[cite: 15]. Results in rapid clearing of skies and crisp, clean conditions[cite: 15].
+### 1. 3-Minute Moving Average (Noise Reduction)
+Every minute, the raw pressure sensor data is passed through a low-pass arithmetic filter:
+`pressureMA[60] = (pressureHistory[60] + pressureHistory[59] + pressureHistory[58]) / 3`
+
+### 2. 5-Minute Barometric Crash (Emergency Storm Warning)
+The system continuously monitors the short-term velocity of pressure drops:
+`shortTrend = pressureMA[60] - pressureMA[55]`
+* **Trigger:** If `shortTrend <= -0.7 hPa`, a rapid decompression event is recognized (typical of severe thunderstorms or supercells). The system immediately overrides the standard forecast to trigger a flashing **STORM WARNING**.
+
+### 3. 1-Hour Forecast Algorithm
+The baseline pressure trend is calculated across a 1-hour window:
+`raw_trend = pressureMA[60] - pressureMA[0]`
+
+The `raw_trend` is then modified by real-time external environmental parameters:
+1. **Wind Direction Modifier (`wind_mod`):** Southerly winds (S, SW, SE) intrinsically bring low-pressure front systems in the region, whereas Easterly/Western flows are more stable.
+   * Southerly flow: `trend = raw_trend - 0.8 hPa`
+   * Lateral flow: `trend = raw_trend - 0.4 hPa`
+2. **Seasonal Offset Factor (`seasonalFactor`):** Due to the thermal differences of air mass density, summer pressure drops are shallow but intense, while winter shifts are heavy and broad. The algorithm applies a `-0.3 hPa` offset in summer (increasing sensitivity) and `+0.3 hPa` in winter.
+
+#### Decision Matrix
+Based on the finalized corrected `trend` and absolute pressure (`p`), the system assigns the forecast text:
+* `trend <= -1.5 + seasonalFactor` $\rightarrow$ **STORMY RAIN** (if $p < 1005\text{ hPa}$) or **RAIN/WEATHER**
+* `trend <= -0.6` $\rightarrow$ **BAD WEATHER**
+* `trend >= 1.2 + seasonalFactor` $\rightarrow$ **SUNNY/CLEAR**
+* `trend >= 0.5` $\rightarrow$ **SLOW IMPROV.**
+* *Stagnant trends fallback to absolute values:*
+  * $p \geq 1020\text{ hPa}$ $\rightarrow$ **STABLE SUNNY**
+  * $p \geq 1013\text{ hPa}$ $\rightarrow$ **SUNNY/DRY** (Summer) / **CLOUDY/DRY** (Winter)
+  * $p \geq 1005\text{ hPa}$ $\rightarrow$ **CLOUDY/STAB.**
+  * $p < 1005\text{ hPa}$ $\rightarrow$ **LOW/CLOUDY**
+
+---
+
+## Execution Flow & Lifecycle
+
+The program bypasses blocking `delay()` loops in the main cycle, utilizing asynchronous `millis()` time-stamping to handle multiple hardware events simultaneously:
