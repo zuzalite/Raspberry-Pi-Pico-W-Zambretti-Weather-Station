@@ -24,7 +24,7 @@ const float BAD_WEATHER_THRESHOLD   = -1.1;   // Időjárás-romlás küszöb (h
 const float SUNNY_CLEAR_THRESHOLD   = 1.2;    // Tiszta/napos idő küszöb (hPa / 60 perc)
 const float SLOW_IMPROV_THRESHOLD   = 0.5;    // Lassú javulás küszöb (hPa / 60 perc)
 const float SEASONAL_OFFSET         = 0.3;    // Szezonális eltolás mértéke
-const float WIND_MULTIPLIER         = 0.5;    // V VÉRMEZŐRE OPTIMALIZÁLT SZÉLIRÁNY-SZORZÓ V
+const float WIND_MULTIPLIER         = 0.5;    // V OPTIMALIZÁLT SZÉLIRÁNY-SZORZÓ V
 
 // ABSZOLÚT NYOMÁSI ZÓNÁK (hPa)
 const float PRESSURE_EXTREME_HIGH   = 1035.0; // Extrém magas nyomás határ (Anticiklon)
