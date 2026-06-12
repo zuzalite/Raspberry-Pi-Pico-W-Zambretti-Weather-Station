@@ -7,13 +7,37 @@
 #include <time.h> 
 #include <ArduinoJson.h> // Hivatalos ipari JSON feldolgozó könyvtár
 
-// --- WI-FI SETTINGS ---
-const char* WIFI_SSID = "xxxxxxxxx";
-const char* WIFI_PASSWORD = "xxxxxxxx";
+// ==============================================================================
+// --- FELHASZNÁLÓI BEÁLLÍTÁSOK (KONFIGURÁCIÓ) ---
+// ==============================================================================
+// WI-FI HÁLÓZATI BEÁLLÍTÁSOK
+const char* WIFI_SSID     = "xxxxxxxx";
+const char* WIFI_PASSWORD = "xxxxxxxxxx";
 
-// --- THINGSPEAK ---
-unsigned long myChannelNumber = xxxxxx;
-const char* myReadAPIKey = "xxxxxxxxxxxx";
+// THINGSPEAK BEÁLLÍTÁSOK
+unsigned long myChannelNumber = xxxxxxx;
+const char* myReadAPIKey      = "xxxxxxxxxxxxxxxx";
+
+// METEOROLÓGIAI KÜSZÖBÉRTÉKEK (A TRÉNING ALAPJÁN FINOMHANGOLHATÓ)
+const float STORM_THRESHOLD         = -1.8;   // Viharjelzés küszöbérték (hPa / 5 perc) -> pl. -4.20
+const float BAD_WEATHER_THRESHOLD   = -1.1;   // Időjárás-romlás küszöb (hPa / 60 perc)
+const float SUNNY_CLEAR_THRESHOLD   = 1.2;    // Tiszta/napos idő küszöb (hPa / 60 perc)
+const float SLOW_IMPROV_THRESHOLD   = 0.5;    // Lassú javulás küszöb (hPa / 60 perc)
+const float SEASONAL_OFFSET         = 0.3;    // Szezonális eltolás mértéke
+const float WIND_MULTIPLIER         = 0.5;    // V VÉRMEZŐRE OPTIMALIZÁLT SZÉLIRÁNY-SZORZÓ V
+
+// ABSZOLÚT NYOMÁSI ZÓNÁK (hPa)
+const float PRESSURE_EXTREME_HIGH   = 1035.0; // Extrém magas nyomás határ (Anticiklon)
+const float PRESSURE_STANDARD_MID   = 1013.0; // Standard tengerszinti alapérték
+const float PRESSURE_EXTREME_LOW    = 995.0;  // Extrém alacsony nyomás határ (Ciklon)
+
+// IDŐZÍTÉSEK ÉS MATEMATIKAI ABLAKOK
+const unsigned long UPDATE_INTERVAL_MS     = 60000UL;  // ThingSpeak adatletöltési gyakoriság (60 mp)
+const unsigned long WIND_CHECK_INTERVAL_MS = 900000UL; // Szélirány és szezon frissítése (15 perc)
+const unsigned long SCREEN_1_DURATION_MS   = 7000UL;   // 1. képernyő (Alapadatok) láthatósága (7 mp)
+const unsigned long SCREEN_2_DURATION_MS   = 4000UL;   // 2. képernyő (Előrejelzés) láthatósága (4 mp)
+const int MA_WINDOW                        = 5;        // Szenzorzaj-szűrés mozgóátlag ablaka (elem)
+// ==============================================================================
 
 // --- OLED ---
 #define SCREEN_WIDTH 128
@@ -30,7 +54,6 @@ float pressureHistory[61] = {0.0};
 float pressureMA[61] = {0.0};
 float tempInHistory[11] = {0.0};
 float tempOutHistory[11] = {0.0};
-const int MA_WINDOW = 3;
 
 String currentWindDir = "N"; 
 bool isBarometricCrash = false;      
@@ -45,7 +68,7 @@ bool isSummer = true;
 
 // Status variables for Boot Screen
 String wifiStatusStr = "WAIT";
-String openMeteoStr  = "WAIT";
+String openMeteoStr   = "WAIT";
 String tsStatusStr   = "WAIT";
 
 void drawBootScreen(String currentAction) {
@@ -172,17 +195,44 @@ bool fetchLatestData() {
     return false;
   }
   
-  float t1 = ThingSpeak.readFloatField(myChannelNumber, 1, myReadAPIKey);
-  delay(500); 
-  float t5 = ThingSpeak.readFloatField(myChannelNumber, 5, myReadAPIKey);
-  delay(500);
-  float p3 = ThingSpeak.readFloatField(myChannelNumber, 3, myReadAPIKey);
+  bool indoorFound = false;
+  bool outdoorFound = false;
+  bool pressureFound = false;
+
+  // 1. Elsődleges olvasás: az összes adat lekérése egyben (mint a Pythonnál a last.json)
+  int statusCode = ThingSpeak.readMultipleFields(myChannelNumber, myReadAPIKey);
   
-  if (!isnan(t1) || !isnan(t5) || !isnan(p3)) {
+  if (statusCode == 200) {
+    float t1 = ThingSpeak.getFieldAsFloat(1);
+    float p3 = ThingSpeak.getFieldAsFloat(3);
+    float t5 = ThingSpeak.getFieldAsFloat(5);
+    
+    if (!isnan(t1) && t1 != 0.0) { inTemp = t1; indoorFound = true; }
+    if (!isnan(t5) && t5 != 0.0) { outTemp = t5; outdoorFound = true; }
+    if (!isnan(p3) && p3 > 950.0 && p3 < 1050.0) { pressure = p3; pressureFound = true; }
+  }
+
+  // 2. BIZTONSÁGI HÁLÓ (Fallback): Amelyik hiányzik, azt célzottan lekérjük egyedi kéréssel
+  if (!indoorFound) {
+    delay(1000); // 1 másodperc szünet az API limit elkerülése miatt
+    float t1 = ThingSpeak.readFloatField(myChannelNumber, 1, myReadAPIKey);
+    if (!isnan(t1) && t1 != 0.0) { inTemp = t1; indoorFound = true; }
+  }
+  
+  if (!outdoorFound) {
+    delay(1000);
+    float t5 = ThingSpeak.readFloatField(myChannelNumber, 5, myReadAPIKey);
+    if (!isnan(t5) && t5 != 0.0) { outTemp = t5; outdoorFound = true; }
+  }
+  
+  if (!pressureFound) {
+    delay(1000);
+    float p3 = ThingSpeak.readFloatField(myChannelNumber, 3, myReadAPIKey);
+    if (!isnan(p3) && p3 > 950.0 && p3 < 1050.0) { pressure = p3; pressureFound = true; }
+  }
+
+  if (indoorFound || outdoorFound || pressureFound) {
     tsStatusStr = "OK";
-    if (!isnan(t1) && t1 != 0.0) inTemp = t1;
-    if (!isnan(t5) && t5 != 0.0) outTemp = t5;
-    if (!isnan(p3) && p3 > 950.0 && p3 < 1050.0) pressure = p3;
     return true;
   } else {
     tsStatusStr = "ERROR";
@@ -214,9 +264,9 @@ void updateLocalHistory() {
   }
   pressureMA[60] = (count > 0) ? sum / count : pressure;
   
-  // JAVÍTVA: Barometric crash pontosan 5 perces ablakban (60. index vs 55. index: delta = 5)
+  // JAVÍTVA: Barometric crash pontosan 5 perces ablakban (60. index vs 55. index: delta = 5) - Küszöb a konfigurációból vett értékre cserélve
   float shortTrend = pressureMA[60] - pressureMA[55];
-  if (shortTrend <= -0.7 && pressureMA[55] > 950.0) {
+  if (shortTrend <= STORM_THRESHOLD && pressureMA[55] > 950.0) {
     isBarometricCrash = true; 
   } else {
     isBarometricCrash = false;
@@ -236,23 +286,34 @@ String getForecastText() {
   float p = pressureMA[60];
   // JAVÍTVA: Pontosan 60 perc különbség (60. index - 0. index)
   float raw_trend = pressureMA[60] - pressureMA[0]; 
-  int wind_mod = 0;
   
-  if (currentWindDir == "S" || currentWindDir == "SW" || currentWindDir == "SE") wind_mod = 2; 
-  else if (currentWindDir == "W" || currentWindDir == "E") wind_mod = 1;
+  // VÉRMEZŐRE OPTIMALIZÁLT SÚLYOZÁSI MÁTRIX (Kivonásra felkészítve a tréning alapján)
+  float wind_mod = 0.0;
+  if (currentWindDir == "S" || currentWindDir == "SW") {
+      wind_mod = 2.0;   // Déli áramlások kompenzációs alapértéke
+  } else if (currentWindDir == "SE" || currentWindDir == "W") {
+      wind_mod = 0.5;   // Enyhébb délies/nyugati hatások
+  } else if (currentWindDir == "NW") {
+      wind_mod = (raw_trend < 0) ? 0.6 : -0.2;
+  } else if (currentWindDir == "E" || currentWindDir == "NE" || currentWindDir == "N") {
+      wind_mod = -0.6;  // Északi/keleti javító tényezők
+  }
   
-  float trend = raw_trend - (wind_mod * 0.4);
-  float seasonalFactor = isSummer ? -0.3 : 0.3; 
+  // AZ OPTIMALIZÁLÓ ÁLTAL MEGHATÁROZOTT KÉPLET
+  float trend = raw_trend - (wind_mod * WIND_MULTIPLIER);
+  float seasonalFactor = isSummer ? -SEASONAL_OFFSET : SEASONAL_OFFSET; 
   
-  if (trend <= -1.5 + seasonalFactor) return (p < 1005) ? "STORMY RAIN" : "RAIN/WEATHER";
-  if (trend <= -0.6) return "BAD WEATHER";
-  if (trend >= 1.2 + seasonalFactor) return "SUNNY/CLEAR"; 
-  if (trend >= 0.5) return "SLOW IMPROV.";
+  if (trend <= STORM_THRESHOLD + seasonalFactor) return (p < 1005.0) ? "STORMY RAIN" : "RAIN/WEATHER";
+  if (trend <= BAD_WEATHER_THRESHOLD) return "BAD WEATHER";
+  if (trend >= SUNNY_CLEAR_THRESHOLD + seasonalFactor) return "SUNNY/CLEAR"; 
+  if (trend >= SLOW_IMPROV_THRESHOLD) return "SLOW IMPROV.";
   
-  if (p >= 1020) return "STABLE SUNNY";
-  if (p >= 1013) return isSummer ? "SUNNY/DRY" : "CLOUDY/DRY"; 
-  if (p >= 1005) return "CLOUDY/STAB.";
-  return "LOW/CLOUDY";
+  // JAVÍTVA: Abszolút értékek beállítása a konfigurált határokhoz igazítva
+  if (p >= PRESSURE_EXTREME_HIGH) return isSummer ? "STABLE SUNNY" : "COLD/FOGGY ANTI";
+  if (p >= PRESSURE_STANDARD_MID) return isSummer ? "SUNNY/DRY" : "CLOUDY/DRY"; 
+  if (p <= PRESSURE_EXTREME_LOW)  return "LOW/HEAVY STORM";
+  
+  return "STABLE/FAIR";
 }
 
 void updateDisplay() {
@@ -333,7 +394,7 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();
   
-  if (currentMillis - lastUpdateCheck >= 60000UL || lastUpdateCheck == 0) {
+  if (currentMillis - lastUpdateCheck >= UPDATE_INTERVAL_MS || lastUpdateCheck == 0) {
     lastUpdateCheck = currentMillis;
     connectWiFi();
     if (fetchLatestData()) {
@@ -342,18 +403,18 @@ void loop() {
     }
   }
   
-  if (currentMillis - lastWindCheck >= 900000UL || lastWindCheck == 0) {
+  if (currentMillis - lastWindCheck >= WIND_CHECK_INTERVAL_MS || lastWindCheck == 0) {
     lastWindCheck = currentMillis;
     fetchWindDirection();
     updateSeason(); 
   }
   
-  if (currentScreen == 1 && currentMillis - lastScreenSwitch >= 7000UL) {
+  if (currentScreen == 1 && currentMillis - lastScreenSwitch >= SCREEN_1_DURATION_MS) {
     lastScreenSwitch = currentMillis;
     currentScreen = 2;
     updateDisplay();
   } 
-  else if (currentScreen == 2 && currentMillis - lastScreenSwitch >= 4000UL) {
+  else if (currentScreen == 2 && currentMillis - lastScreenSwitch >= SCREEN_2_DURATION_MS) {
     lastScreenSwitch = currentMillis;
     currentScreen = 1;
     updateDisplay();
